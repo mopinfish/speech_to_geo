@@ -5,10 +5,11 @@
   "main": "index.js",
   "scripts": {
     "build-sdk": "cd ../../; npm i; npm run build",
-    "start": "node ."
+    "start": "node .",
+    "ngrok": "ngrok http -region=ap 3000"
   },
   "dependencies": {
-    "@line/bot-sdk": "../../",
+    "@line/bot-sdk": "*",
     "express": "^4.17.1",
     "ngrok": "^3.2.7"
   }
