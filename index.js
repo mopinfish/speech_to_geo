@@ -9,6 +9,61 @@ const ngrok = require("ngrok");
 const AWS = require("aws-sdk");
 const s3 = new AWS.S3();
 const axios = require("axios");
+const { stdout } = require("process");
+const { Readable, Transform } = require("stream");
+const {
+  TranscribeStreamingClient,
+  StartStreamTranscriptionCommand,
+} = require("@aws-sdk/client-transcribe-streaming");
+const { NodeHttp2Handler } = require("@aws-sdk/node-http-handler");
+
+const parseTranscribeStream = new Transform({
+  writableObjectMode: true,
+  transform(chunk, encoding, cb) {
+    if (chunk.TranscriptEvent && chunk.TranscriptEvent.Transcript) {
+      const results = chunk.TranscriptEvent.Transcript.Results;
+      if (
+        results.length > 0 &&
+        results[0].Alternatives.length > 0 &&
+        !results[0].IsPartial
+      ) {
+        this.push(
+          `${results[0].Alternatives[0].Items[0].StartTime}: ${results[0].Alternatives[0].Transcript}\n`
+        );
+      }
+    }
+    cb();
+  },
+});
+
+async function transcribe(src, dest) {
+  const audioSource = fs.createReadStream(src, {
+    highWaterMark: 1024,
+  });
+
+  const audioStream = async function* () {
+    for await (const payloadChunk of audioSource) {
+      yield { AudioEvent: { AudioChunk: payloadChunk } };
+    }
+  };
+
+  const command = new StartStreamTranscriptionCommand({
+    LanguageCode: "ja-JP",
+    MediaEncoding: "pcm",
+    MediaSampleRateHertz: 8000,
+    AudioStream: audioStream(),
+  });
+
+  const client = new TranscribeStreamingClient({
+    requestHandler: new NodeHttp2Handler({ sessionTimeout: 5000 }),
+  });
+
+  const response = await client.send(command);
+  const transcriptsStream = Readable.from(response.TranscriptResultStream);
+
+  const output = fs.createWriteStream(dest);
+  transcriptsStream.pipe(parseTranscribeStream).pipe(stdout).pipe(output);
+}
 
 // create LINE SDK config from env variables
 const config = {
@@ -465,7 +520,10 @@ function handleAudio(message, replyToken) {
       responseType: "arraybuffer",
     });
     const buffer = new Buffer.from(res.data);
-    fs.writeFileSync("./downloaded/tmp.mp3", buffer);
+    const src = "./downloaded/tmp.mp3";
+    const dest = "./downloaded/tmp.txt";
+    fs.writeFileSync(src, buffer);
+    await transcribe(src, dest);
     uploadToS3(buffer);
 
     return client.replyMessage(replyToken, {
