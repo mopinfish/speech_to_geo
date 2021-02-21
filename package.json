@@ -9,6 +9,7 @@
     "ngrok": "ngrok http -region=ap 3000"
   },
   "dependencies": {
+    "@aws-sdk/client-transcribe": "^3.6.0",
     "@aws-sdk/client-transcribe-streaming": "^3.6.0",
     "@line/bot-sdk": "*",
     "aws-sdk": "^2.848.0",

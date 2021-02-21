@@ -12,57 +12,52 @@ const axios = require("axios");
 const { stdout } = require("process");
 const { Readable, Transform } = require("stream");
 const {
-  TranscribeStreamingClient,
-  StartStreamTranscriptionCommand,
-} = require("@aws-sdk/client-transcribe-streaming");
-const { NodeHttp2Handler } = require("@aws-sdk/node-http-handler");
+  TranscribeClient,
+  DeleteTranscriptionJobCommand,
+  StartTranscriptionJobCommand,
+} = require("@aws-sdk/client-transcribe");
 
-const parseTranscribeStream = new Transform({
-  writableObjectMode: true,
-  transform(chunk, encoding, cb) {
-    if (chunk.TranscriptEvent && chunk.TranscriptEvent.Transcript) {
-      const results = chunk.TranscriptEvent.Transcript.Results;
-      if (
-        results.length > 0 &&
-        results[0].Alternatives.length > 0 &&
-        !results[0].IsPartial
-      ) {
-        this.push(
-          `${results[0].Alternatives[0].Items[0].StartTime}: ${results[0].Alternatives[0].Transcript}\n`
-        );
-      }
-    }
-    cb();
-  },
-});
-
-async function transcribe(src, dest) {
-  const audioSource = fs.createReadStream(src, {
-    highWaterMark: 1024,
+function wait(time) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, time);
   });
+}
 
-  const audioStream = async function* () {
-    for await (const payloadChunk of audioSource) {
-      yield { AudioEvent: { AudioChunk: payloadChunk } };
-    }
+async function transcribe(dest) {
+  // Set the AWS Region
+  const REGION = "ap-northeast-1"; // For example, "us-east-1"
+
+  // Set the parameters
+  const params = {
+    TranscriptionJobName: "speech_to_geo",
+    LanguageCode: "ja-JP", // For example, 'en-US'
+    MediaFormat: "mp4", // For example, 'wav'
+    Media: {
+      MediaFileUri:
+        "https://ghp-voice.s3-ap-northeast-1.amazonaws.com/sample.m4a",
+      // For example, "https://transcribe-demo.s3-REGION.amazonaws.com/hello_world.wav"
+    },
+    OutputBucketName: "ghp-voice",
   };
 
-  const command = new StartStreamTranscriptionCommand({
-    LanguageCode: "ja-JP",
-    MediaEncoding: "pcm",
-    MediaSampleRateHertz: 8000,
-    AudioStream: audioStream(),
-  });
+  // Create an Amazon Transcribe service client object
+  const client = new TranscribeClient({ region: REGION });
 
-  const client = new TranscribeStreamingClient({
-    requestHandler: new NodeHttp2Handler({ sessionTimeout: 5000 }),
-  });
-
-  const response = await client.send(command);
-  const transcriptsStream = Readable.from(response.TranscriptResultStream);
-
-  const output = fs.createWriteStream(dest);
-  transcriptsStream.pipe(parseTranscribeStream).pipe(stdout).pipe(output);
+  const run = async () => {
+    try {
+      const delete_data = await client.send(
+        new DeleteTranscriptionJobCommand({
+          TranscriptionJobName: "speech_to_geo",
+        })
+      );
+      console.log("Success - deleted", delete_data);
+      const data = await client.send(new StartTranscriptionJobCommand(params));
+      console.log("Success - put", data);
+    } catch (err) {
+      console.log("Error", err);
+    }
+  };
+  await run();
 }
 
 // create LINE SDK config from env variables
@@ -174,7 +169,7 @@ function handleEvent(event) {
 function uploadToS3(v) {
   const params = {
     Bucket: "ghp-voice",
-    Key: "sample.mp3",
+    Key: "sample.m4a",
     ACL: "public-read",
   };
   params.Body = v;
@@ -182,6 +177,16 @@ function uploadToS3(v) {
     if (err) console.log(err, err.stack);
     else console.log(data);
   });
+}
+
+async function getFromS3() {
+  const params = {
+    Bucket: "ghp-voice",
+    Key: "speech_to_geo.json",
+  };
+  const data = await s3.getObject(params).promise();
+  const object = JSON.parse(data.Body.toString());
+  return object;
 }
 
 function handleText(message, replyToken, source) {
@@ -520,15 +525,21 @@ function handleAudio(message, replyToken) {
       responseType: "arraybuffer",
     });
     const buffer = new Buffer.from(res.data);
-    const src = "./downloaded/tmp.mp3";
+    const src = "./downloaded/tmp.m4a";
     const dest = "./downloaded/tmp.txt";
     fs.writeFileSync(src, buffer);
-    await transcribe(src, dest);
     uploadToS3(buffer);
+    await transcribe(dest);
+    await wait(10000);
+    const data = await getFromS3();
+    const text = data.results.transcripts.map((t) => t.transcript).join("");
 
+    console.log("----------------------");
+    console.log(text);
+    console.log("----------------------");
     return client.replyMessage(replyToken, {
       type: "location",
-      title: "東京駅近辺",
+      title: text,
       address: "東京都千代田区丸の内",
       latitude: 35.6812,
       longitude: 139.7671,
