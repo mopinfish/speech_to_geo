@@ -60,6 +60,30 @@ async function transcribe(dest) {
   await run();
 }
 
+async function reverseGeocode(text) {
+  const baseURL = "https://www.geocoding.jp/api/?q=";
+
+  const encodedText = encodeURIComponent(text);
+  const URL = baseURL + encodedText;
+
+  const res = await axios.get(URL);
+  const ans = res.data;
+
+  if (ans.indexOf("error") > 0) {
+    app.displayDialog("該当する住所が見つかりませんでした。");
+    return {};
+  }
+
+  const address = ans.split("<address>")[1].split("</address>")[0];
+  const latitude = ans.split("<lat>")[1].split("</lat>")[0];
+  const longitude = ans.split("<lng>")[1].split("</lng>")[0];
+  return {
+    address,
+    latitude,
+    longitude,
+  };
+}
+
 // create LINE SDK config from env variables
 const config = {
   channelAccessToken: process.env.LINE_ACCESS_TOKEN,
@@ -166,23 +190,23 @@ function handleEvent(event) {
   }
 }
 
-function uploadToS3(v) {
+function uploadToS3(v, filename) {
   const params = {
     Bucket: "ghp-voice",
-    Key: "sample.m4a",
+    Key: filename,
     ACL: "public-read",
   };
   params.Body = v;
-  s3.putObject(params, function (err, data) {
+  s3.putObject(params, function(err, data) {
     if (err) console.log(err, err.stack);
     else console.log(data);
   });
 }
 
-async function getFromS3() {
+async function getFromS3(key) {
   const params = {
     Bucket: "ghp-voice",
-    Key: "speech_to_geo.json",
+    Key: key,
   };
   const data = await s3.getObject(params).promise();
   const object = JSON.parse(data.Body.toString());
@@ -528,21 +552,53 @@ function handleAudio(message, replyToken) {
     const src = "./downloaded/tmp.m4a";
     const dest = "./downloaded/tmp.txt";
     fs.writeFileSync(src, buffer);
-    uploadToS3(buffer);
+    uploadToS3(buffer, "sample.m4a");
     await transcribe(dest);
     await wait(10000);
-    const data = await getFromS3();
-    const text = data.results.transcripts.map((t) => t.transcript).join("");
+    const data = await getFromS3("speech_to_geo.json");
+    const text = data.results.transcripts
+      .map((t) => t.transcript)
+      .join("")
+      .replace(" ", "")
+      .replace("　", "");
 
     console.log("----------------------");
     console.log(text);
-    console.log("----------------------");
+    const records = await getFromS3("sample.geojson");
+    const record = await reverseGeocode(text);
+    console.log(record);
+    records.push({
+      type: "FeatureCollection",
+      crs: {
+        type: "name",
+        properties: {
+          name: "urn:ogc:def:crs:OGC:1.3:CRS84",
+        },
+      },
+      features: [
+        {
+          type: "Feature",
+          properties: {
+            place: record.address,
+            Supplies: "トイレットペーパー",
+          },
+          geometry: {
+            type: "Point",
+            coordinates: [record.longitude, record.latitude],
+          },
+        },
+      ],
+    });
+    const newGeoJson = JSON.stringify(records);
+    console.log("-------------------------------------");
+    uploadToS3(newGeoJson, "sample.geojson");
+
     return client.replyMessage(replyToken, {
       type: "location",
       title: text,
-      address: "東京都千代田区丸の内",
-      latitude: 35.6812,
-      longitude: 139.7671,
+      address: record.address,
+      latitude: record.latitude,
+      longitude: record.longitude,
     });
 
     //return client.replyMessage(replyToken, {
