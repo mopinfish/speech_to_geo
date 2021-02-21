@@ -6,6 +6,9 @@ const fs = require("fs");
 const path = require("path");
 const cp = require("child_process");
 const ngrok = require("ngrok");
+const AWS = require("aws-sdk");
+const s3 = new AWS.S3();
+const axios = require("axios");
 
 // create LINE SDK config from env variables
 const config = {
@@ -111,6 +114,19 @@ function handleEvent(event) {
     default:
       throw new Error(`Unknown event: ${JSON.stringify(event)}`);
   }
+}
+
+function uploadToS3(v) {
+  const params = {
+    Bucket: "ghp-voice",
+    Key: "sample.mp3",
+    ACL: "public-read",
+  };
+  params.Body = v;
+  s3.putObject(params, function (err, data) {
+    if (err) console.log(err, err.stack);
+    else console.log(data);
+  });
 }
 
 function handleText(message, replyToken, source) {
@@ -444,12 +460,27 @@ function handleAudio(message, replyToken) {
     getContent = Promise.resolve(message.contentProvider);
   }
 
-  return getContent.then(({ originalContentUrl }) => {
-    return client.replyMessage(replyToken, {
-      type: "audio",
-      originalContentUrl,
-      duration: message.duration,
+  return getContent.then(async ({ originalContentUrl }) => {
+    const res = await axios.get(originalContentUrl, {
+      responseType: "arraybuffer",
     });
+    const buffer = new Buffer.from(res.data);
+    fs.writeFileSync("./downloaded/tmp.mp3", buffer);
+    uploadToS3(buffer);
+
+    return client.replyMessage(replyToken, {
+      type: "location",
+      title: "東京駅近辺",
+      address: "東京都千代田区丸の内",
+      latitude: 35.6812,
+      longitude: 139.7671,
+    });
+
+    //return client.replyMessage(replyToken, {
+    //  type: "audio",
+    //  originalContentUrl,
+    //  duration: message.duration,
+    //});
   });
 }
 
