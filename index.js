@@ -554,7 +554,7 @@ function handleAudio(message, replyToken) {
     fs.writeFileSync(src, buffer);
     uploadToS3(buffer, "sample.m4a");
     await transcribe(dest);
-    await wait(10000);
+    await wait(1000);
     const data = await getFromS3("speech_to_geo.json");
     const text = data.results.transcripts
       .map((t) => t.transcript)
