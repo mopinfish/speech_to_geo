@@ -10,7 +10,10 @@
   },
   "dependencies": {
     "@line/bot-sdk": "*",
+    "aws-sdk": "^2.848.0",
+    "axios": "^0.21.1",
     "express": "^4.17.1",
+    "fs": "0.0.1-security",
     "ngrok": "^3.2.7"
   }
 }
